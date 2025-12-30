@@ -8,6 +8,10 @@ import re
 import requests
 from pathlib import Path
 import os, platform, subprocess
+import httpx
+import asyncio
+from bs4 import BeautifulSoup
+import json
 
 # ---------------------------
 # Utility: Open a file with the system default application
@@ -22,39 +26,44 @@ def open_file(file_path):
             subprocess.call(["xdg-open", file_path])
     except Exception as e:
         print(f"Error opening file: {e}")
+        
+async def download_tab_meta(url, log_queue):
+    """Utility: get source_url and songId from tab page"""
+    log_queue.put(f"Downloading Songsterr tab: {url.strip()}\n")
+    async with httpx.AsyncClient() as client:
+        tab = await client.get(url.strip())
+    if tab.status_code != 200:
+        log_queue.put(f"Error downloading Songsterr tab: {tab.status_code} - {tab.reason_phrase}\n")
+        return (None, None)
+    log_queue.put(f"Parsing Songsterr tab\n")
+    soup = BeautifulSoup(tab.text, "html.parser")
+    log_queue.put(f"Extracting Songsterr tab metadata\n")
+    tag = soup.find(id="state")
+    if len(tag) == 0:
+        log_queue.put(f"Error: no metadata found in Songsterr tab\n")
+        return (None, None)
+    state = json.loads(tag.contents[0])
+    if "meta" in state and "current" in state["meta"] and "source" in state["meta"]["current"]:
+        source_url = state["meta"]["current"]["source"]
+    else:
+        source_url = None
+    if "meta" in state and "songId" in state["meta"]:
+        song_id = state["meta"]["songId"]
+    else:
+        song_id = None
+    return (source_url, song_id)
 
 # ---------------------------
 # Tab 1: Songsterr Downloader
 # ---------------------------
 def download_songsterr_gui(songsterr_link, download_dir, log_queue):
-    log_queue.put(f"Parsing link: {songsterr_link}\n")
-    match = re.search(r"s(\d+)$", songsterr_link.strip())
-    if not match:
-        log_queue.put(f"Could not parse Songsterr ID from link: {songsterr_link}\n")
+    (source_url, song_id) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
+    
+    if (source_url, song_id) == (None, None):
         return
 
-    song_id = match.group(1)
-    revisions_url = f"https://www.songsterr.com/api/meta/{song_id}/revisions"
-    log_queue.put(f"Fetching revisions from: {revisions_url}\n")
-    try:
-        resp = requests.get(revisions_url)
-    except Exception as e:
-        log_queue.put(f"Error fetching revisions for song ID {song_id}: {e}\n")
-        return
-
-    if resp.status_code != 200:
-        log_queue.put(f"Songsterr API returned status code {resp.status_code} for {revisions_url}\n")
-        return
-
-    revisions = resp.json()
-    if not revisions:
-        log_queue.put(f"No revisions found for song ID {song_id}\n")
-        return
-
-    latest_revision = revisions[0]
-    source_url = latest_revision.get('source')
-    if not source_url:
-        log_queue.put(f"No 'source' found in the latest revision for song ID {song_id}\n")
+    if source_url ==  None:
+        log_queue.put(f"No 'source' found in the tab page for song ID {song_id}\n")
         return
 
     download_dir_path = Path(download_dir).expanduser()
@@ -91,34 +100,13 @@ def download_songsterr_gui(songsterr_link, download_dir, log_queue):
 # ---------------------------
 def download_drum_midi(songsterr_link, download_dir, log_queue):
     # Download the Guitar Pro file (same as in Tab 1)
-    log_queue.put(f"Parsing link: {songsterr_link}\n")
-    match = re.search(r"s(\d+)$", songsterr_link.strip())
-    if not match:
-        log_queue.put(f"Could not parse Songsterr ID from link: {songsterr_link}\n")
+    (source_url, song_id) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
+    
+    if (source_url, song_id) == (None, None):
         return
 
-    song_id = match.group(1)
-    revisions_url = f"https://www.songsterr.com/api/meta/{song_id}/revisions"
-    log_queue.put(f"Fetching revisions from: {revisions_url}\n")
-    try:
-        resp = requests.get(revisions_url)
-    except Exception as e:
-        log_queue.put(f"Error fetching revisions for song ID {song_id}: {e}\n")
-        return
-
-    if resp.status_code != 200:
-        log_queue.put(f"Songsterr API returned status code {resp.status_code} for {revisions_url}\n")
-        return
-
-    revisions = resp.json()
-    if not revisions:
-        log_queue.put(f"No revisions found for song ID {song_id}\n")
-        return
-
-    latest_revision = revisions[0]
-    source_url = latest_revision.get('source')
-    if not source_url:
-        log_queue.put(f"No 'source' found in the latest revision for song ID {song_id}\n")
+    if source_url ==  None:
+        log_queue.put(f"No 'source' found in the tab page for song ID {song_id}\n")
         return
 
     download_dir_path = Path(download_dir).expanduser()
