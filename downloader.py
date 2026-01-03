@@ -51,13 +51,22 @@ async def download_tab_meta(url, log_queue):
         song_id = state["meta"]["songId"]
     else:
         song_id = None
-    return (source_url, song_id)
+    if "meta" in state and "current" in state["meta"] and "artist" in state["meta"]["current"]:
+        artist = state["meta"]["current"]["artist"]
+    else:
+        artist = None
+    if "meta" in state and "current" in state["meta"] and "title" in state["meta"]["current"]:
+        title = state["meta"]["current"]["title"]
+    else:
+        title = None
+    
+    return (source_url, song_id, artist, title)
 
 # ---------------------------
 # Tab 1: Songsterr Downloader
 # ---------------------------
 def download_songsterr_gui(songsterr_link, download_dir, log_queue):
-    (source_url, song_id) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
+    (source_url, song_id, artist, title) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
     
     if (source_url, song_id) == (None, None):
         return
@@ -69,7 +78,18 @@ def download_songsterr_gui(songsterr_link, download_dir, log_queue):
     download_dir_path = Path(download_dir).expanduser()
     download_dir_path.mkdir(parents=True, exist_ok=True)
     extension = source_url.rsplit('.', 1)[-1]
-    gp_filename = download_dir_path / f"Song_{song_id}.{extension}"
+    safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist) if artist else ""
+    safe_title = re.sub(r'[\\/*?:"<>|]', "", title) if title else ""
+    name_parts = []
+    if safe_artist:
+        name_parts.append(safe_artist)
+    if safe_title:
+        name_parts.append(safe_title)
+    if name_parts and (safe_artist or safe_title):
+        base_name = " - ".join(name_parts) + f" ({song_id}).{extension}"
+        gp_filename = download_dir_path / base_name
+    else:
+        gp_filename = download_dir_path / f"Song_{song_id}.{extension}"
     log_queue.put(f"Found tab for Songsterr ID {song_id} — saving as {gp_filename}\n")
 
     try:
@@ -100,7 +120,7 @@ def download_songsterr_gui(songsterr_link, download_dir, log_queue):
 # ---------------------------
 def download_drum_midi(songsterr_link, download_dir, log_queue):
     # Download the Guitar Pro file (same as in Tab 1)
-    (source_url, song_id) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
+    (source_url, song_id, artist, title) = asyncio.run(download_tab_meta(songsterr_link, log_queue))
     
     if (source_url, song_id) == (None, None):
         return
@@ -112,7 +132,18 @@ def download_drum_midi(songsterr_link, download_dir, log_queue):
     download_dir_path = Path(download_dir).expanduser()
     download_dir_path.mkdir(parents=True, exist_ok=True)
     extension = source_url.rsplit('.', 1)[-1]
-    gp_filename = download_dir_path / f"Song_{song_id}.{extension}"
+    safe_artist = re.sub(r'[\\/*?:"<>|]', "", artist) if artist else ""
+    safe_title = re.sub(r'[\\/*?:"<>|]', "", title) if title else ""
+    name_parts = []
+    if safe_artist:
+        name_parts.append(safe_artist)
+    if safe_title:
+        name_parts.append(safe_title)
+    if name_parts and (safe_artist or safe_title):
+        base_name = " - ".join(name_parts) + f" ({song_id}).{extension}"
+        gp_filename = download_dir_path / base_name
+    else:
+        gp_filename = download_dir_path / f"Song_{song_id}.{extension}"
     log_queue.put(f"Found tab for Songsterr ID {song_id} — saving as {gp_filename}\n")
 
     try:
@@ -188,13 +219,43 @@ def download_drum_midi(songsterr_link, download_dir, log_queue):
 
     log_queue.put(f"Drum MIDI conversion complete: {midi_output_path}\n")
 
-def start_songsterr_download(url, log_queue):
+def start_songsterr_download(input_text, log_queue):
     download_dir = "~/Tabs"
-    download_songsterr_gui(url, download_dir, log_queue)
 
-def start_drum_midi_download(url, log_queue):
+    url_text = input_text.get("1.0", tk.END)
+    urls = [line.strip() for line in url_text.splitlines() if line.strip()]
+    if not urls:
+        messagebox.showerror("Input Error", "Please enter at least one URL.")
+        return
+
+    def run_downloads():
+            for url in urls:
+                log_queue.put(f"\n---\nProcessing: {url}\n")
+                try:
+                    download_songsterr_gui(url, download_dir, log_queue)
+                except Exception as e:
+                    log_queue.put(f"Error processing {url}: {e}\n")
+            log_queue.put("\nAll downloads complete.\n")
+    threading.Thread(target=run_downloads, daemon=True).start()
+
+def start_drum_midi_download(input_text, log_queue):
     download_dir = "~/Tabs"
-    download_drum_midi(url, download_dir, log_queue)
+
+    url_text = input_text.get("1.0", tk.END)
+    urls = [line.strip() for line in url_text.splitlines() if line.strip()]
+    if not urls:
+        messagebox.showerror("Input Error", "Please enter at least one URL.")
+        return
+
+    def run_downloads():
+            for url in urls:
+                log_queue.put(f"\n---\nProcessing: {url}\n")
+                try:
+                    download_drum_midi(url, download_dir, log_queue)
+                except Exception as e:
+                    log_queue.put(f"Error processing {url}: {e}\n")
+            log_queue.put("\nAll downloads complete.\n")
+    threading.Thread(target=run_downloads, daemon=True).start()
 
 def get_downloaded_files(download_dir):
     download_dir_path = Path(download_dir).expanduser()
@@ -223,40 +284,32 @@ def main():
 
     
     notebook = ttk.Notebook(root)
-    notebook.pack(expand=TRUE, fill='both', padx=20, pady=20)
+    notebook.pack(expand=True, fill='both', padx=20, pady=20)
 
 
     tab1 = ttk.Frame(notebook)
     notebook.add(tab1, text="Songsterr Downloader")
-    lbl_url1 = ttk.Label(tab1, text="Enter Song URL or ID:", font=("Helvetica", 14))
+    lbl_url1 = ttk.Label(tab1, text="Enter one or more Songsterr URLs (one per line):", font=("Helvetica", 14))
     lbl_url1.pack(pady=10)
-    entry_url1 = ttk.Entry(tab1, width=50, font=("Helvetica", 14))
-    entry_url1.pack(pady=10)
-    btn_download1 = ttk.Button(tab1, text="Download Tab", bootstyle="danger",
-                               command=lambda: threading.Thread(
-                                   target=start_songsterr_download,
-                                   args=(entry_url1.get().strip(), log_queue_songsterr),
-                                   daemon=True).start())
+    text_url1 = ttk.Text(tab1, height=10, width=80, bg="#1a1a1a", fg="#ff4d4d", insertbackground="#ff4d4d", font=("Consolas", 12))
+    text_url1.pack(pady=10)
+    btn_download1 = ttk.Button(tab1, text="Download Tab(s)", bootstyle="danger")
     btn_download1.pack(pady=10)
-    text_widget1 = tk.Text(tab1, height=15, width=80, bg="#1a1a1a", fg="#ff4d4d",
-                             insertbackground="#ff4d4d", font=("Consolas", 12))
+    text_widget1 = tk.Text(tab1, height=15, width=80, bg="#1a1a1a", fg="#ff4d4d", insertbackground="#ff4d4d", font=("Consolas", 12))
     text_widget1.pack(pady=10)
+    btn_download1.config(command=lambda: start_songsterr_download(text_url1, log_queue_songsterr))
 
     tab2 = ttk.Frame(notebook)
     notebook.add(tab2, text="Drum MIDI Downloader")
-    lbl_url2 = ttk.Label(tab2, text="Enter Song URL or ID:", font=("Helvetica", 14))
+    lbl_url2 = ttk.Label(tab2, text="Enter one or more Songsterr URLs (one per line):", font=("Helvetica", 14))
     lbl_url2.pack(pady=10)
-    entry_url2 = ttk.Entry(tab2, width=50, font=("Helvetica", 14))
-    entry_url2.pack(pady=10)
-    btn_download2 = ttk.Button(tab2, text="Download Drum MIDI", bootstyle="danger",
-                               command=lambda: threading.Thread(
-                                   target=start_drum_midi_download,
-                                   args=(entry_url2.get().strip(), log_queue_drum),
-                                   daemon=True).start())
+    text_url2 = ttk.Text(tab2, height=10, width=80, bg="#1a1a1a", fg="#ff4d4d", insertbackground="#ff4d4d", font=("Consolas", 12))
+    text_url2.pack(pady=10)
+    btn_download2 = ttk.Button(tab2, text="Download Drum MIDI(s)", bootstyle="danger")
     btn_download2.pack(pady=10)
-    text_widget2 = tk.Text(tab2, height=15, width=80, bg="#1a1a1a", fg="#ff4d4d",
-                             insertbackground="#ff4d4d", font=("Consolas", 12))
+    text_widget2 = tk.Text(tab2, height=15, width=80, bg="#1a1a1a", fg="#ff4d4d", insertbackground="#ff4d4d", font=("Consolas", 12))
     text_widget2.pack(pady=10)
+    btn_download2.config(command=lambda: start_drum_midi_download(text_url2, log_queue_drum))
 
     tab3 = ttk.Frame(notebook)
     notebook.add(tab3, text="Audio-to-Tab AI")
@@ -265,7 +318,7 @@ def main():
     lbl_info = ttk.Label(tab3, text="This feature is coming soon!", font=("Helvetica", 14))
     lbl_info.pack(pady=10)
     btn_audio = ttk.Button(tab3, text="Process Audio", bootstyle="outline-danger",
-                           state=DISABLED,
+                           state=tk.DISABLED,
                            command=lambda: messagebox.showinfo("Coming Soon", "Audio-to-Tab AI feature is coming soon!"))
     btn_audio.pack(pady=10)
 
@@ -279,10 +332,10 @@ def main():
     btn_frame.pack(pady=10)
     btn_refresh = ttk.Button(btn_frame, text="Refresh List", bootstyle="primary",
                              command=lambda: refresh_file_list(listbox_files))
-    btn_refresh.pack(side=LEFT, padx=10)
+    btn_refresh.pack(side=tk.LEFT, padx=10)
     btn_preview = ttk.Button(btn_frame, text="Preview", bootstyle="primary",
                              command=lambda: preview_selected_file(listbox_files))
-    btn_preview.pack(side=LEFT, padx=10)
+    btn_preview.pack(side=tk.LEFT, padx=10)
 
     def refresh_file_list(listbox):
         listbox.delete(0, tk.END)
