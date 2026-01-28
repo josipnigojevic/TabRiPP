@@ -1,9 +1,4 @@
-import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
-import tkinter as tk
-from tkinter import messagebox
-import threading
-import queue
+import argparse
 import re
 import requests
 from pathlib import Path
@@ -12,6 +7,7 @@ import httpx
 import asyncio
 from bs4 import BeautifulSoup
 import json
+import sys
 
 # ---------------------------
 # Utility: Open a file with the system default application
@@ -27,6 +23,11 @@ def open_file(file_path):
     except Exception as e:
         print(f"Error opening file: {e}")
         
+class SimpleLogger:
+    """Simple logger that prints to console"""
+    def put(self, message):
+        print(message, end='')
+
 async def download_tab_meta(url, log_queue):
     """Utility: get source_url and songId from tab page"""
     log_queue.put(f"Downloading Songsterr tab: {url.strip()}\n")
@@ -59,7 +60,7 @@ async def download_tab_meta(url, log_queue):
         title = state["meta"]["current"]["title"]
     else:
         title = None
-    
+
     return (source_url, song_id, artist, title)
 
 # ---------------------------
@@ -219,7 +220,23 @@ def download_drum_midi(songsterr_link, download_dir, log_queue):
 
     log_queue.put(f"Drum MIDI conversion complete: {midi_output_path}\n")
 
+def download_cli(url, download_dir="~/Tabs"):
+    """CLI version of downloader - synchronous and simple"""
+    logger = SimpleLogger()
+    logger.put(f"\n---\nProcessing: {url}\n")
+    try:
+        download_songsterr_gui(url, download_dir, logger)
+        logger.put("\nDownload complete.\n")
+        return True
+    except Exception as e:
+        logger.put(f"Error processing {url}: {e}\n")
+        return False
+
 def start_songsterr_download(input_text, log_queue):
+    import tkinter as tk
+    from tkinter import messagebox
+    import threading
+
     download_dir = "~/Tabs"
 
     url_text = input_text.get("1.0", tk.END)
@@ -239,6 +256,10 @@ def start_songsterr_download(input_text, log_queue):
     threading.Thread(target=run_downloads, daemon=True).start()
 
 def start_drum_midi_download(input_text, log_queue):
+    import tkinter as tk
+    from tkinter import messagebox
+    import threading
+
     download_dir = "~/Tabs"
 
     url_text = input_text.get("1.0", tk.END)
@@ -263,7 +284,13 @@ def get_downloaded_files(download_dir):
     files = list(download_dir_path.glob("*"))
     return [str(f) for f in files if f.is_file()]
 
-def main():
+def main_gui():
+    """GUI mode - imports tkinter and runs the GUI"""
+    import ttkbootstrap as ttk
+    import tkinter as tk
+    from tkinter import messagebox
+    import queue
+
     log_queue_songsterr = queue.Queue()
     log_queue_drum = queue.Queue()
 
@@ -282,7 +309,7 @@ def main():
     style = ttk.Style()
     style.configure("TButton", font=("Helvetica", 12, "bold"))
 
-    
+
     notebook = ttk.Notebook(root)
     notebook.pack(expand=True, fill='both', padx=20, pady=20)
 
@@ -367,4 +394,19 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='TabRiPP - Songsterr tab downloader')
+    parser.add_argument('--headless', action='store_true', help='Run in CLI mode without GUI')
+    parser.add_argument('--url', type=str, help='Songsterr URL to download')
+    parser.add_argument('--output-dir', type=str, default='~/Tabs', help='Download directory (default: ~/Tabs)')
+
+    args = parser.parse_args()
+
+    if args.headless:
+        if not args.url:
+            print("Error: --url is required when using --headless mode")
+            sys.exit(1)
+
+        success = download_cli(args.url, args.output_dir)
+        sys.exit(0 if success else 1)
+    else:
+        main_gui()
